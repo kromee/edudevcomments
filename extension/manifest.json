@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "EduDev Comments",
+  "version": "0.1.0",
+  "description": "Genera comentarios profesionales para publicaciones de LinkedIn con un modelo local.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAv4JflrP8ZOH/63JhHMzHGviyB9qN8WnGmQsjyve5Vx7cwIVkZIZTJzYw/sWf+jCRqOr6cS6meN7lPZoaIixfqgcmYqmSJeDbuFy/ArOl89GRhFPcBxq2RhfpqilzlfSQuqpHoz823CQhah0lCYj2p9KierUG6Am6T+kysAdS9eE5LVgPkwn/SyXWw7ezdKPm6ILbr0VavzQKcH93nqccOTUyt1Ttts3I3IHyufM+uyaxDApP+LQ3PO2tc9jujsisj+3eDfM6WHKqSvx88WTbukHu31I407PuH2eKWvpxLY8TTSo3ROLfKOZU8wT+9vOG5g6BgKmZEroR5yYMuV3sRwIDAQAB",
+  "permissions": ["clipboardWrite"],
+  "host_permissions": ["http://127.0.0.1:8788/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*", "https://linkedin.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "EduDev Comments"
+  }
+}
