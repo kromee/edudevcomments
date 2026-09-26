@@ -1,7 +1,7 @@
 {
   "name": "edudevcomments-extension",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "scripts": {
     "build": "tsc && cp manifest.json dist/manifest.json",
     "clean": "rm -rf dist"

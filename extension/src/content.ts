@@ -62,6 +62,8 @@ type Draft = {
 const signatures = new WeakMap<Element, string>();
 const drafts = new WeakMap<HTMLElement, Draft>();
 const generating = new WeakSet<Element>();
+const generationIds = new WeakMap<HTMLElement, number>();
+let nextGeneration = 0;
 const pending = new Set<Element | Document>();
 let scheduled = 0;
 
@@ -286,6 +288,11 @@ function ensureStyle(): void {
       color: #f3f6f8;
       border-color: rgba(255, 255, 255, .16);
     }
+    .edudev-comment-cancel {
+      border-color: rgba(0, 0, 0, .18);
+      background: transparent;
+      color: #5e6870;
+    }
     html.theme--dark .edudev-comment-trigger,
     html.theme--dark .edudev-comment-actions button,
     body.theme--dark .edudev-comment-trigger,
@@ -294,17 +301,39 @@ function ensureStyle(): void {
       color: #70b5f9;
       border-color: #70b5f9;
     }
+    html.theme--dark .edudev-comment-cancel,
+    body.theme--dark .edudev-comment-cancel {
+      background: transparent;
+      color: #c0c7cc;
+      border-color: rgba(255, 255, 255, .2);
+    }
   `;
   document.documentElement.appendChild(style);
 }
 
-function ownedRoot(post: Element): HTMLElement | null {
-  for (const candidate of post.querySelectorAll(".edudev-comment-root")) {
-    if (candidate instanceof HTMLElement && candidate.parentElement?.closest(POST_SELECTOR) === post) {
-      return candidate;
-    }
+function rootsInside(post: Element): HTMLElement[] {
+  return [...post.querySelectorAll(".edudev-comment-root")].filter(
+    (node): node is HTMLElement => node instanceof HTMLElement,
+  );
+}
+
+function dismiss(post: Element, root: HTMLElement): void {
+  generationIds.set(root, 0);
+  generating.delete(post);
+  const panel = root.querySelector(".edudev-comment-panel");
+  const trigger = root.querySelector(".edudev-comment-trigger");
+  const body = root.querySelector(".edudev-comment-body");
+  if (panel instanceof HTMLElement) {
+    panel.hidden = true;
   }
-  return null;
+  if (body instanceof HTMLElement) {
+    body.textContent = "";
+    delete body.dataset.ready;
+  }
+  if (trigger instanceof HTMLButtonElement) {
+    trigger.hidden = false;
+    trigger.disabled = false;
+  }
 }
 
 function requestComment(draft: Draft, previous?: string): Promise<CommentResult> {
@@ -334,6 +363,7 @@ function showPanel(root: HTMLElement, message: string, mode: "loading" | "ready"
   const trigger = root.querySelector(".edudev-comment-trigger");
   const copy = root.querySelector(".edudev-comment-copy");
   const regenerate = root.querySelector(".edudev-comment-regenerate");
+  const cancel = root.querySelector(".edudev-comment-cancel");
   if (!(title instanceof HTMLElement) || !(body instanceof HTMLElement) || !(actions instanceof HTMLElement)) {
     return;
   }
@@ -349,12 +379,15 @@ function showPanel(root: HTMLElement, message: string, mode: "loading" | "ready"
   } else {
     delete body.dataset.ready;
   }
-  actions.hidden = mode !== "ready" && mode !== "retry";
+  actions.hidden = false;
   if (copy instanceof HTMLButtonElement) {
     copy.hidden = mode !== "ready";
   }
   if (regenerate instanceof HTMLButtonElement) {
     regenerate.hidden = mode !== "ready" && mode !== "retry";
+  }
+  if (cancel instanceof HTMLButtonElement) {
+    cancel.hidden = false;
   }
   const panel = root.querySelector(".edudev-comment-panel");
   if (panel instanceof HTMLElement) {
@@ -366,10 +399,15 @@ async function generate(post: Element, root: HTMLElement, previous?: string): Pr
   if (generating.has(post)) {
     return;
   }
+  const generation = ++nextGeneration;
+  generationIds.set(root, generation);
   generating.add(post);
   showPanel(root, "Generando comentario…", "loading");
   try {
     await expandPost(post);
+    if (!isCurrentGeneration(root, generation)) {
+      return;
+    }
     const text = extractPostText(post);
     signatures.set(post, text.slice(0, 240) || "empty");
     const author = extractAuthor(post);
@@ -380,7 +418,7 @@ async function generate(post: Element, root: HTMLElement, previous?: string): Pr
     const draft = { post: text, author };
     drafts.set(root, draft);
     const result = await requestComment(draft, previous);
-    if (!root.isConnected) {
+    if (!root.isConnected || !isCurrentGeneration(root, generation)) {
       return;
     }
     if ("error" in result) {
@@ -389,8 +427,14 @@ async function generate(post: Element, root: HTMLElement, previous?: string): Pr
     }
     showPanel(root, result.comment, "ready");
   } finally {
-    generating.delete(post);
+    if (isCurrentGeneration(root, generation)) {
+      generating.delete(post);
+    }
   }
+}
+
+function isCurrentGeneration(root: HTMLElement, generation: number): boolean {
+  return generationIds.get(root) === generation;
 }
 
 function createRoot(post: Element): HTMLElement {
@@ -428,11 +472,16 @@ function createRoot(post: Element): HTMLElement {
   regenerate.className = "edudev-comment-regenerate";
   regenerate.textContent = "🔄 Regenerar";
 
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "edudev-comment-cancel";
+  cancel.textContent = "Cancelar";
+
   const stop = (event: Event) => {
     event.preventDefault();
     event.stopPropagation();
   };
-  for (const button of [trigger, copy, regenerate]) {
+  for (const button of [trigger, copy, regenerate, cancel]) {
     button.addEventListener("mousedown", stop);
     button.addEventListener("click", stop);
   }
@@ -461,8 +510,11 @@ function createRoot(post: Element): HTMLElement {
     }
     void regenerateComment(post, root, draft, previous);
   });
+  cancel.addEventListener("click", () => {
+    dismiss(post, root);
+  });
 
-  actions.append(copy, regenerate);
+  actions.append(copy, regenerate, cancel);
   panel.append(title, body, actions);
   root.append(trigger, panel);
   return root;
@@ -477,11 +529,13 @@ async function regenerateComment(
   if (generating.has(post)) {
     return;
   }
+  const generation = ++nextGeneration;
+  generationIds.set(root, generation);
   generating.add(post);
   showPanel(root, "Generando comentario…", "loading");
   try {
     const result = await requestComment(draft, previous);
-    if (!root.isConnected) {
+    if (!root.isConnected || !isCurrentGeneration(root, generation)) {
       return;
     }
     if ("error" in result) {
@@ -490,7 +544,9 @@ async function regenerateComment(
     }
     showPanel(root, result.comment, "ready");
   } finally {
-    generating.delete(post);
+    if (isCurrentGeneration(root, generation)) {
+      generating.delete(post);
+    }
   }
 }
 
@@ -553,7 +609,11 @@ function sync(post: Element): void {
     return;
   }
   const signature = extractPostText(post).slice(0, 240) || "empty";
-  const existing = ownedRoot(post);
+  const roots = rootsInside(post);
+  for (const extra of roots.slice(1)) {
+    extra.remove();
+  }
+  const existing = roots[0];
   if (existing && signatures.get(post) === signature) {
     return;
   }
@@ -596,10 +656,10 @@ function postsIn(scope: ParentNode): Element[] {
 }
 
 function scan(target: ParentNode): void {
-  for (const post of postsIn(target)) {
-    if (isOutermost(post) && !isCommentItem(post)) {
-      sync(post);
-    }
+  const posts = postsIn(target).filter((post) => isOutermost(post) && !isCommentItem(post));
+  const unique = posts.filter((post) => !posts.some((other) => other !== post && other.contains(post)));
+  for (const post of unique) {
+    sync(post);
   }
 }
 
