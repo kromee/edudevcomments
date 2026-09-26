@@ -37,6 +37,19 @@ const COMMENT_SELECTOR = [
   "[data-view-name='feed-comment']",
 ].join(",");
 
+const COMMENT_BOX_SELECTOR = [
+  "[componentkey^='commentBox-']",
+  "[data-testid='comment-box']",
+  ".comments-comment-box",
+  ".comments-comment-texteditor",
+].join(",");
+
+const EDITOR_SELECTOR = [
+  "div[role='textbox'][contenteditable='true']",
+  ".ql-editor[contenteditable='true']",
+  ".ProseMirror[contenteditable='true']",
+].join(",");
+
 const STYLE_ID = "edudev-comment-style";
 
 type CommentResult = { comment: string } | { error: string };
@@ -76,8 +89,30 @@ function cleanAuthor(value: string): string | undefined {
   return line;
 }
 
+function isCommentEditor(element: Element): boolean {
+  const label = [
+    element.getAttribute("aria-label"),
+    element.getAttribute("aria-placeholder"),
+    element.getAttribute("data-placeholder"),
+  ].join(" ").toLowerCase();
+  if (/comment|comentario/.test(label)) {
+    return true;
+  }
+  return Boolean(element.closest(COMMENT_BOX_SELECTOR));
+}
+
+function isCommentItem(element: Element): boolean {
+  return Boolean(element.closest(".comments-comment-item, article.comments-comment-item, [data-id*='comment']"));
+}
+
 function isOutermost(post: Element): boolean {
-  return post.parentElement?.closest(POST_SELECTOR) == null;
+  if (post.parentElement?.closest(POST_SELECTOR)) {
+    return false;
+  }
+  if (post.getAttribute("role") === "listitem" && post.parentElement?.closest("[role='listitem']")) {
+    return false;
+  }
+  return true;
 }
 
 function outermostPost(node: Element): Element | null {
@@ -477,7 +512,22 @@ async function copyComment(comment: string): Promise<boolean> {
   }
 }
 
+function commentBox(post: Element): Element | null {
+  const editor = Array.from(post.querySelectorAll(EDITOR_SELECTOR)).find(
+    (element) => isCommentEditor(element) && !element.closest(".edudev-comment-root"),
+  );
+  if (!editor) {
+    return post.querySelector(COMMENT_BOX_SELECTOR);
+  }
+  return editor.closest(COMMENT_BOX_SELECTOR) ?? editor.closest("form") ?? editor;
+}
+
 function insertionAnchor(post: Element): { parent: Element; before: ChildNode | null } {
+  const box = commentBox(post);
+  if (box?.parentElement && post.contains(box) && !box.closest(".edudev-comment-root")) {
+    return { parent: box.parentElement, before: box };
+  }
+
   const action = Array.from(
     post.querySelectorAll(".feed-shared-social-action-bar, [data-view-name='feed-social-action-bar']"),
   ).find((element) => !element.closest(COMMENT_SELECTOR));
@@ -499,7 +549,7 @@ function insertionAnchor(post: Element): { parent: Element; before: ChildNode | 
 }
 
 function sync(post: Element): void {
-  if (!isOutermost(post) || generating.has(post)) {
+  if (!isOutermost(post) || isCommentItem(post) || generating.has(post)) {
     return;
   }
   const signature = extractPostText(post).slice(0, 240) || "empty";
@@ -515,17 +565,39 @@ function sync(post: Element): void {
   signatures.set(post, signature);
 }
 
-function scan(target: ParentNode): void {
-  if (target instanceof Element) {
-    const post = outermostPost(target);
+function postsIn(scope: ParentNode): Element[] {
+  const root = scope instanceof Element || scope instanceof Document ? scope : document;
+  const found = new Set<Element>();
+  if (root instanceof Element) {
+    const post = outermostPost(root) ?? (root.matches('[role="listitem"]') ? root : null);
     if (post) {
-      sync(post);
-      return;
+      found.add(post);
     }
   }
-  const scope = target instanceof Element || target instanceof Document ? target : document;
-  for (const post of scope.querySelectorAll(POST_SELECTOR)) {
-    if (isOutermost(post)) {
+  for (const post of root.querySelectorAll(`${POST_SELECTOR}, [role="listitem"]`)) {
+    found.add(post);
+  }
+  const editors = root instanceof Element && root.matches(EDITOR_SELECTOR)
+    ? [root, ...root.querySelectorAll(EDITOR_SELECTOR)]
+    : [...root.querySelectorAll(EDITOR_SELECTOR)];
+  for (const editor of editors) {
+    if (!isCommentEditor(editor)) {
+      continue;
+    }
+    const post = editor.closest(POST_SELECTOR)
+      ?? editor.closest('[role="listitem"]')
+      ?? editor.closest("article")
+      ?? editor.parentElement;
+    if (post) {
+      found.add(post);
+    }
+  }
+  return [...found];
+}
+
+function scan(target: ParentNode): void {
+  for (const post of postsIn(target)) {
+    if (isOutermost(post) && !isCommentItem(post)) {
       sync(post);
     }
   }
